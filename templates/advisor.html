@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#07576d" />
+  <title>مساعد المرشد الأكاديمي</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  <style>
+    html, body { height: 100%; overflow: hidden; }
+    body { display: flex; flex-direction: column; }
+    .chat-page { flex: 1; min-height: 0; overflow: hidden; }
+    .chat-main { height: 100%; overflow: hidden; display: flex; flex-direction: column; }
+    #chatSection { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .chat-messages { flex: 1; min-height: 0; overflow-y: scroll; }
+  </style>
+</head>
+<body>
+
+  <header class="mobile-bar" aria-label="شريط التنقل">
+    <button type="button" class="menu-toggle" id="menuToggle" aria-expanded="false" aria-controls="sidebar">☰</button>
+    <span class="mobile-bar-title">مساعد المرشد</span>
+    <img src="{{ url_for('static', filename='assets/logo-uj.svg') }}" alt="" class="mobile-bar-logo" width="36" height="36" />
+  </header>
+
+  <div class="sidebar-backdrop" id="sidebarBackdrop" aria-hidden="true"></div>
+
+  <div class="chat-page">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
+        <div class="sidebar-brand">
+          <img src="{{ url_for('static', filename='assets/logo-uj.svg') }}" alt="جامعة جدة" />
+          <span class="sidebar-brand-text"></span>
+        </div>
+        <nav class="sidebar-menu" aria-label="القائمة">
+          <a href="#" class="menu-item active" id="chatLink" aria-current="page">محادثة</a>
+          <a href="#" class="menu-item" id="dashboardLink">لوحة التحكم</a>
+        </nav>
+      </div>
+      <div class="sidebar-bottom">
+        <a href="/" class="menu-item logout-btn">تسجيل خروج</a>
+      </div>
+    </aside>
+
+    <main class="chat-main">
+
+      <!-- ===== Chat Section ===== -->
+      <section id="chatSection">
+        <header class="chat-header">
+          <h1>مساعد المرشد الأكاديمي</h1>
+          <p></p>
+        </header>
+
+        <section class="chat-messages" id="chatMessages" aria-live="polite">
+          <div class="message bot">
+            <div class="message-bubble">
+              أهلًا 👋 أنا مساعدك كمرشد أكاديمي. كيف أقدر أساعدك اليوم؟
+            </div>
+          </div>
+        </section>
+
+        <form class="chat-input-area" id="chatForm">
+          <input type="text" id="chatInput" placeholder="اكتب استفسارك عن الطالب..." autocomplete="off" enterkeyhint="send" />
+          <button type="submit">إرسال</button>
+        </form>
+      </section>
+
+      <!-- ===== Dashboard Section ===== -->
+      <section id="dashboardSection" class="advisor-dashboard hidden">
+
+        <div class="dash-topbar">
+          <div>
+            <p class="dash-kicker">لوحة تحكم المرشد الأكاديمي</p>
+            <h1>بيانات المرشدة: <span id="advisorName">ريم المطيري</span></h1>
+          </div>
+          <button class="refresh-button" id="refreshDashboard">↻ تحديث البيانات</button>
+        </div>
+
+        <div class="compact-dashboard">
+
+          <!-- Donut card: risk + graduating -->
+          <div class="dash-card donut-card">
+            <div class="two-donuts">
+              <div class="donut-item">
+                <div class="donut-ring" id="riskDonut"><span id="riskPercent">-</span></div>
+                <p>الطلاب عالين الخطورة</p>
+              </div>
+              <div class="donut-item">
+                <div class="donut-ring teal" id="gradDonut"><span id="gradPercent">-</span></div>
+                <p>الطلاب المتوقع تخرجهم</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Gauge: avg performance -->
+          <div class="dash-card gauge-card">
+            <h3>متوسط الأداء الأكاديمي</h3>
+            <div class="gauge" id="planGauge"><span id="planPercent">-</span></div>
+            <small>حضور + مشاركة + اختبارات + واجبات + ميدترم + مشاريع</small>
+          </div>
+
+          <!-- Mini cards: high-risk count + graduating count -->
+          <div class="mini-cards">
+            <div class="dash-card mini-card">
+              <span>طلاب عالين الخطورة (أداء &lt; 60%)</span>
+              <strong id="highRiskStudents">-</strong>
+            </div>
+            <div class="dash-card mini-card">
+              <span>متوقع تخرجهم هذا العام</span>
+              <strong id="graduatingThisYear">-</strong>
+            </div>
+          </div>
+
+          <!-- Total students card -->
+          <div class="dash-card mini-card total-card">
+            <span>إجمالي الطلاب</span>
+            <strong id="totalStudents">-</strong>
+            <small class="total-sub" id="supportCasesLabel">-</small>
+          </div>
+
+          <!-- Risk list -->
+          <div class="dash-list-card risk-list-card">
+            <h3>أولوية المتابعة الأكاديمية</h3>
+            <div id="riskList" class="compact-list"></div>
+            <button class="text-link">عرض الكل ←</button>
+          </div>
+
+          <!-- Support list -->
+          <div class="dash-list-card support-list-card">
+            <h3>طلاب يحتاجون دعم إرشادي</h3>
+            <div id="supportList" class="compact-list"></div>
+            <button class="text-link">عرض الكل ←</button>
+          </div>
+
+        </div>
+
+        <!-- Repeated courses panel -->
+        <div class="dash-list-card courses-panel">
+          <h3>أكثر المقررات تكرارًا بحالة R</h3>
+          <div id="coursesList" class="courses-compact-list"></div>
+        </div>
+
+      </section>
+
+    </main>
+  </div>
+
+  <script>
+  (function () {
+    var toggle = document.getElementById("menuToggle");
+    var sidebar = document.getElementById("sidebar");
+    var backdrop = document.getElementById("sidebarBackdrop");
+    function setOpen(open) {
+      sidebar.classList.toggle("is-open", open);
+      backdrop.classList.toggle("is-open", open);
+      backdrop.setAttribute("aria-hidden", open ? "false" : "true");
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      document.body.style.overflow = open ? "hidden" : "";
+    }
+    toggle.addEventListener("click", function () { setOpen(!sidebar.classList.contains("is-open")); });
+    backdrop.addEventListener("click", function () { setOpen(false); });
+    window.addEventListener("resize", function () { if (window.innerWidth > 768) setOpen(false); });
+  })();
+
+  const ADVISOR_NAME     = "ريم المطيري";
+  const chatLink         = document.getElementById("chatLink");
+  const dashboardLink    = document.getElementById("dashboardLink");
+  const chatSection      = document.getElementById("chatSection");
+  const dashboardSection = document.getElementById("dashboardSection");
+  const refreshDashboard = document.getElementById("refreshDashboard");
+  let dashboardLoaded    = false;
+
+  function showSection(name) {
+    const toDash = name === "dashboard";
+    chatSection.classList.toggle("hidden", toDash);
+    dashboardSection.classList.toggle("hidden", !toDash);
+    chatLink.classList.toggle("active", !toDash);
+    dashboardLink.classList.toggle("active", toDash);
+    if (toDash && !dashboardLoaded) loadDashboard();
+  }
+
+  chatLink.addEventListener("click",      function (e) { e.preventDefault(); showSection("chat"); });
+  dashboardLink.addEventListener("click", function (e) { e.preventDefault(); showSection("dashboard"); });
+  refreshDashboard.addEventListener("click", function () { dashboardLoaded = false; loadDashboard(); });
+
+  function setText(id, value, suffix) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = value + (suffix || "");
+  }
+
+  function safePercent(part, total) {
+    if (!total) return 0;
+    return Math.round((Number(part || 0) / Number(total)) * 100);
+  }
+
+  function setDonut(id, percent) {
+    var el = document.getElementById(id);
+    if (el) el.style.setProperty("--value", Math.max(0, Math.min(100, percent)) + "%");
+  }
+
+  function setGauge(id, percent) {
+    var el = document.getElementById(id);
+    if (el) el.style.setProperty("--value", Math.max(0, Math.min(100, percent)));
+  }
+
+  function renderRiskList(students) {
+    document.getElementById("riskList").innerHTML = students.slice(0, 4).map(function (s, i) {
+      return '<div class="compact-row ' + (i === 1 ? "selected" : "") + '">' +
+        '<span class="avatar">♙</span>' +
+        '<div><strong>' + s.student_name + '</strong>' +
+        '<small>' + s.student_id + ' — الساعات المتبقية: ' + s.remaining_hours + ' — أداء: ' + s.risk_score + '%</small></div>' +
+        '<span class="risk-badge">' + s.risk_score + '%</span></div>';
+    }).join("") || "<p>لا توجد بيانات.</p>";
+  }
+
+  function renderSupportList(students) {
+    document.getElementById("supportList").innerHTML = students.slice(0, 4).map(function (s, i) {
+      return '<div class="compact-row ' + (i === 0 ? "selected" : "") + '">' +
+        '<span class="avatar">♙</span>' +
+        '<div><strong>' + s.student_name + '</strong>' +
+        '<small>ضغط نفسي: ' + s.mental_stress_level + ' | مالي: ' + s.financial_stress + ' | نوم: ' + s.sleep_duration_hours_per_night + 'س</small></div>' +
+        '<span class="study-badge">' + s.study_hours_per_week + 'س/أ</span></div>';
+    }).join("") || "<p>لا توجد بيانات.</p>";
+  }
+
+  function renderCourses(courses) {
+    document.getElementById("coursesList").innerHTML = courses.map(function (c) {
+      return '<div class="course-compact-row">' +
+        '<span>' + c.course_label + '</span>' +
+        '<strong>' + c.repeat_count + '</strong></div>';
+    }).join("") || "<p>لا توجد مقررات بحالة R.</p>";
+  }
+
+  async function loadDashboard() {
+    document.getElementById("riskList").innerHTML    = '<p class="loading-text">جاري التحميل...</p>';
+    document.getElementById("supportList").innerHTML = '<p class="loading-text">جاري التحميل...</p>';
+    document.getElementById("coursesList").innerHTML = '<p class="loading-text">جاري التحميل...</p>';
+    try {
+      const res  = await fetch("/advisor-dashboard-data?advisor=" + encodeURIComponent(ADVISOR_NAME));
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "تعذر تحميل الداشبورد");
+
+      const riskPercent = safePercent(data.high_risk_students, data.total_students);
+      const gradPercent = safePercent(data.graduating_this_year, data.total_students);
+      const planPercent = Math.round(Number(data.avg_performance || 0));
+
+      document.getElementById("advisorName").textContent = data.advisor;
+      setText("totalStudents",      data.total_students);
+      setText("highRiskStudents",   data.high_risk_students);
+      setText("graduatingThisYear", data.graduating_this_year);
+      setText("riskPercent",        riskPercent, "%");
+      setText("gradPercent",        gradPercent, "%");
+      setText("planPercent",        planPercent, "%");
+      setText("supportCasesLabel",  "حالات دعم / مواءمة: " + (data.medical_cases + data.accommodation_cases));
+
+      setDonut("riskDonut", riskPercent);
+      setDonut("gradDonut", gradPercent);
+      setGauge("planGauge", planPercent);
+
+      renderRiskList(data.top_risk_students   || []);
+      renderSupportList(data.support_students || []);
+      renderCourses(data.repeated_courses     || []);
+      dashboardLoaded = true;
+    } catch (err) {
+      document.getElementById("riskList").innerHTML = '<p class="dashboard-error">' + err.message + '</p>';
+    }
+  }
+
+  /* ===== Chat ===== */
+  const chatForm     = document.getElementById("chatForm");
+  const chatInput    = document.getElementById("chatInput");
+  const chatMessages = document.getElementById("chatMessages");
+
+  function formatText(text) {
+    let t = String(text)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    t = t.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/(^|\n)(\d+)\. /g, "$1<br><b>$2.</b> ");
+    t = t.replace(/(^|\n)[-•] /g, "$1<br>• ");
+    t = t.replace(/\n\n/g, "<br><br>").replace(/\n/g, "<br>");
+    t = t.replace(/^(<br>)+/, "");
+    return t;
+  }
+
+  function appendMessage(text, sender) {
+    const msg    = document.createElement("div");
+    msg.className = "message " + sender;
+    const bubble  = document.createElement("div");
+    bubble.className = "message-bubble";
+    bubble.innerHTML = sender === "bot"
+      ? formatText(text)
+      : String(text).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    msg.appendChild(bubble);
+    chatMessages.appendChild(msg);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  chatForm.addEventListener("submit", async function (e) {
+    e.preventDefault();
+    const text = chatInput.value.trim();
+    if (!text) return;
+    appendMessage(text, "user");
+    chatInput.value = "";
+    appendMessage("جاري تحليل الطلب...", "bot");
+    try {
+      const res  = await fetch("/advisor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text })
+      });
+      const data = await res.json();
+      chatMessages.removeChild(chatMessages.lastChild);
+      appendMessage(data.reply || "لم يتم إرجاع رد من الخادم.", "bot");
+    } catch (err) {
+      chatMessages.removeChild(chatMessages.lastChild);
+      appendMessage("تعذر الاتصال بالخادم.", "bot");
+    }
+  });
+  </script>
+</body>
+</html>

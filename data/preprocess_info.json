@@ -1,0 +1,26 @@
+{
+    "numeric_cols": [
+        "Study Hours Per Week",
+        "Social Media Usage (Hours per day)",
+        "Sleep Duration (Hours per night)",
+        "Physical Exercise (Hours per week)",
+        "Family Support  ",
+        "Financial Stress",
+        "Peer Pressure",
+        "Mental Stress Level",
+        "Diet Quality",
+        "Cognitive Distortions"
+    ],
+    "binary_cols": [
+        "Counseling Attendance",
+        "Family Mental Health History",
+        "Medical Condition"
+    ],
+    "drop_cols": [
+        "Age",
+        "Student ID",
+        "Substance Use",
+        "Relationship Stress",
+        "Gender"
+    ]
+}

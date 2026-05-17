@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a4a6e" />
+  <meta name="color-scheme" content="light" />
+  <title>نظام الإرشاد الأكاديمي — جامعة جدة</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+
+<body class="login-page">
+  <div class="container">
+    <div class="left-panel">
+      <img
+        src="{{ url_for('static', filename='assets/logo-uj.svg') }}"
+        alt="شعار جامعة جدة"
+        class="logo"
+      />
+      <p class="brand-tagline">نظام الإرشاد الأكاديمي المدعوم بالذكاء الاصطناعي</p>
+    </div>
+
+    <div class="right-panel">
+      <div class="login-card">
+        <h2 class="system-title">تسجيل الدخول</h2>
+        <p class="system-subtitle">الوصول آمن ومصمم لأجهزة الجوال والحاسب</p>
+
+        <form id="loginForm" class="login-form" autocomplete="on">
+          <input
+            type="text"
+            id="userId"
+            name="username"
+            inputmode="numeric"
+            placeholder="الرقم الجامعي أو الرقم الوظيفي"
+            required
+          />
+
+          <input
+            type="password"
+            id="password"
+            name="password"
+            placeholder="كلمة السر"
+            required
+          />
+
+          <select id="role" name="role" required>
+            <option value="">اختر نوع المستخدم</option>
+            <option value="student">طالب</option>
+            <option value="advisor">مرشد أكاديمي</option>
+            <option value="employee">موظف</option>
+          </select>
+
+          <p id="errorMessage" class="error-message" role="alert"></p>
+
+          <button type="submit" class="login-button">تسجيل دخول</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <footer class="login-footer">جامعة جدة — واجهة متجاوبة مع جميع الأجهزة</footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
