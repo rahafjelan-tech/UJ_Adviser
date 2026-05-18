@@ -17,3 +17,4 @@ tavily-python==0.3.0
 gunicorn==21.2.0
 waitress==3.0.0
 httpx==0.27.2
+pytorch-tabnet==4.1.0
