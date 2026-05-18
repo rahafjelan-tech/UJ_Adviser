@@ -23,7 +23,17 @@ if (role !== "guest" && (!userId || !password)) {
   errorMessage.textContent = "الرجاء تعبئة جميع الحقول.";
   return;
 }
+if (role === "guest") {
+  errorMessage.textContent = "";
 
+  localStorage.setItem(
+    "currentUser",
+    JSON.stringify({ id: "guest", role: "guest" })
+  );
+
+  window.location.href = "/student-page";
+  return;
+}
   const user = users.find(function (u) {
     return u.id === userId && u.password === password && u.role === role;
   });
