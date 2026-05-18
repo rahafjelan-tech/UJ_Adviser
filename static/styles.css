@@ -708,3 +708,22 @@ body {
 .guest-login:hover {
   color: #003f50;
 }
+.guest-login {
+  margin-top: 12px;
+  width: 100%;
+  display: block;
+  background: transparent;
+  border: none;
+  color: #0a4a6e;
+  font-family: "Tajawal", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+  padding: 10px;
+  text-decoration: underline;
+}
+
+.guest-login:hover {
+  color: #06364f;
+}
