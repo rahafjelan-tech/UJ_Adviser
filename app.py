@@ -152,7 +152,28 @@ def load_notebook():
 
 load_notebook()
 
+# =========================
+# Fallback patches for Render
+# =========================
 
+if "basic_autocorrect" not in global_scope:
+    def basic_autocorrect(text):
+        return text
+    global_scope["basic_autocorrect"] = basic_autocorrect
+    print("[PATCH] basic_autocorrect fallback added.")
+
+
+if "client" not in global_scope:
+    try:
+        from openai import OpenAI
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if api_key:
+            global_scope["client"] = OpenAI(api_key=api_key)
+            print("[PATCH] OpenAI client added from environment.")
+        else:
+            print("[WARNING] OPENAI_API_KEY is missing.")
+    except Exception as e:
+        print("[WARNING] Could not create OpenAI client:", e)
 # =========================
 # DB helper
 # =========================
