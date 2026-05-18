@@ -14,26 +14,16 @@ form.addEventListener("submit", function (event) {
   const password = document.getElementById("password").value.trim();
   const role = document.getElementById("role").value;
 
-if (!role) {
-  errorMessage.textContent = "الرجاء اختيار نوع المستخدم.";
-  return;
-}
+  if (!role) {
+    errorMessage.textContent = "الرجاء اختيار نوع المستخدم.";
+    return;
+  }
 
-if (role !== "guest" && (!userId || !password)) {
-  errorMessage.textContent = "الرجاء تعبئة جميع الحقول.";
-  return;
-}
-if (role === "guest") {
-  errorMessage.textContent = "";
+  if (!userId || !password) {
+    errorMessage.textContent = "الرجاء تعبئة جميع الحقول.";
+    return;
+  }
 
-  localStorage.setItem(
-    "currentUser",
-    JSON.stringify({ id: "guest", role: "guest" })
-  );
-
-  window.location.href = "/student-page";
-  return;
-}
   const user = users.find(function (u) {
     return u.id === userId && u.password === password && u.role === role;
   });
@@ -58,3 +48,16 @@ if (role === "guest") {
     window.location.href = "/employee-page";
   }
 });
+
+const guestLogin = document.getElementById("guestLogin");
+
+if (guestLogin) {
+  guestLogin.addEventListener("click", function () {
+    localStorage.setItem(
+      "currentUser",
+      JSON.stringify({ id: "guest", role: "guest" })
+    );
+
+    window.location.href = "/student-page";
+  });
+}
