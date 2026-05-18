@@ -14,10 +14,15 @@ form.addEventListener("submit", function (event) {
   const password = document.getElementById("password").value.trim();
   const role = document.getElementById("role").value;
 
-  if (!userId || !password || !role) {
-    errorMessage.textContent = "الرجاء تعبئة جميع الحقول.";
-    return;
-  }
+if (!role) {
+  errorMessage.textContent = "الرجاء اختيار نوع المستخدم.";
+  return;
+}
+
+if (role !== "guest" && (!userId || !password)) {
+  errorMessage.textContent = "الرجاء تعبئة جميع الحقول.";
+  return;
+}
 
   const user = users.find(function (u) {
     return u.id === userId && u.password === password && u.role === role;
