@@ -60,6 +60,6 @@ if (guestLogin) {
       JSON.stringify({ id: "guest", role: "guest" })
     );
 
-    window.location.href = "/student-page";
+    window.location.href = "/advisor-page";
   });
 }
