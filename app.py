@@ -151,7 +151,11 @@ def load_notebook():
 
 
 load_notebook()
-
+if "ai_autocorrect" not in global_scope:
+    def ai_autocorrect(text):
+        return text
+    global_scope["ai_autocorrect"] = ai_autocorrect
+    print("[PATCH] ai_autocorrect fallback added.")
 # =========================
 # Fallback patches for Render
 # =========================
