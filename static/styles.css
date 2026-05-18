@@ -693,3 +693,18 @@ body {
 @media (min-width: 769px) {
   .sidebar-backdrop { display: none !important; }
 }
+.guest-login {
+  margin-top: 14px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #00546b;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.guest-login:hover {
+  color: #003f50;
+}
