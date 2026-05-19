@@ -3,6 +3,7 @@ from flask_cors import CORS
 import nbformat
 import sqlite3
 import os
+import traceback
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 CORS(app)
@@ -275,6 +276,15 @@ def advisor():
             "reply": "أنا مساعد المرشد الأكاديمي. أستطيع مساعدتك في الاستفسارات الأكاديمية، بيانات الطلاب، الحالات المتعثرة، التحصيل، الحضور، والخطط الدراسية."
         })
 
+    if "التحويل الداخلي" in normalized_q or "تحويل داخلي" in normalized_q:
+        return jsonify({
+            "reply": (
+                "التحويل الداخلي يكون عادة من خلال بوابة الجامعة أو النظام الأكاديمي، "
+                "ويعتمد على شروط مثل المعدل، المقاعد المتاحة، اجتياز المتطلبات، "
+                "وموافقة الكلية أو القسم. راجعي دليل التحويل الداخلي أو تواصلي مع المرشدة الأكاديمية للتأكد من الشروط الخاصة بتخصصك."
+            )
+        })
+
     if "rag_student_answer" not in global_scope:
         return jsonify({"reply": "دالة rag_student_answer غير موجودة"}), 500
 
@@ -293,6 +303,7 @@ def advisor():
         return jsonify({"reply": str(result)})
 
     except Exception as e:
+        traceback.print_exc()
         return jsonify({"reply": f"خطأ في معالجة سؤال المرشد: {str(e)}"}), 500
 
 # =========================
