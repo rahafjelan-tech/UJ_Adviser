@@ -766,6 +766,62 @@ def debug_scope():
         "has_collection": "collection" in global_scope,
     })
 
+@app.route("/debug-rag")
+def debug_rag():
+    q = request.args.get("q", "").strip()
+    protos = global_scope.get("protos")
 
+    out = {
+        "query": q,
+        "notebook_error": notebook_error,
+        "has_chroma": "chroma" in global_scope,
+        "has_protos": "protos" in global_scope,
+        "has_answer": "answer" in global_scope,
+        "has_retrieve_final": "retrieve_final" in global_scope,
+        "has_rag_student_answer": "rag_student_answer" in global_scope,
+        "answer_debug": None,
+        "retrieve_final_debug": None,
+        "error": None,
+    }
+
+    try:
+        if "retrieve_final" in global_scope:
+            try:
+                r = global_scope["retrieve_final"](q, protos=protos, mode="router")
+                out["retrieve_final_debug"] = {
+                    "type": type(r).__name__,
+                    "repr": repr(r)[:3000],
+                }
+            except Exception as e:
+                out["retrieve_final_debug"] = {
+                    "error": f"{type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc(),
+                }
+
+        if "answer" in global_scope:
+            try:
+                a = global_scope["answer"](
+                    query=q,
+                    protos=protos,
+                    mode="router",
+                    return_debug=True,
+                    use_web=True,
+                )
+                out["answer_debug"] = {
+                    "type": type(a).__name__,
+                    "repr": repr(a)[:5000],
+                }
+            except Exception as e:
+                out["answer_debug"] = {
+                    "error": f"{type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc(),
+                }
+
+        return jsonify(out)
+
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+        out["traceback"] = traceback.format_exc()
+        return jsonify(out), 500
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True)
