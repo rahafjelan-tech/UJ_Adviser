@@ -749,25 +749,10 @@ def advisor_dashboard_data():
         conn.close()
 
 
-# =========================
-# Debug
-# =========================
-@app.route("/debug-scope")
-def debug_scope():
-    return jsonify({
-        "loaded_names": list(global_scope.keys()),
-        "has_answer": "answer" in global_scope,
-        "has_global_student_answering": "global_student_answering" in global_scope,
-        "has_protos": "protos" in global_scope,
-        "has_vectorstore": "vectorstore" in global_scope,
-        "has_retriever": "retriever" in global_scope,
-        "has_documents": "documents" in global_scope,
-        "has_chunks": "chunks" in global_scope,
-        "has_collection": "collection" in global_scope,
-    })
-
 @app.route("/debug-rag")
 def debug_rag():
+    import inspect
+
     q = request.args.get("q", "").strip()
     protos = global_scope.get("protos")
 
@@ -778,25 +763,68 @@ def debug_rag():
         "has_protos": "protos" in global_scope,
         "has_answer": "answer" in global_scope,
         "has_retrieve_final": "retrieve_final" in global_scope,
+        "has_retrieve_with_router_as_hint": "retrieve_with_router_as_hint" in global_scope,
         "has_rag_student_answer": "rag_student_answer" in global_scope,
+        "signatures": {},
+        "retrieve_final_attempts": [],
         "answer_debug": None,
-        "retrieve_final_debug": None,
+        "rag_student_answer_debug": None,
         "error": None,
     }
 
+    def safe_repr(x, limit=5000):
+        try:
+            return repr(x)[:limit]
+        except Exception as e:
+            return f"<repr failed: {type(e).__name__}: {e}>"
+
+    def add_signature(name):
+        fn = global_scope.get(name)
+        if fn is None:
+            out["signatures"][name] = None
+            return
+        try:
+            out["signatures"][name] = str(inspect.signature(fn))
+        except Exception as e:
+            out["signatures"][name] = f"signature_error: {type(e).__name__}: {e}"
+
+    for name in [
+        "retrieve_final",
+        "retrieve_with_router_as_hint",
+        "answer",
+        "rag_student_answer",
+        "context_answers_question",
+    ]:
+        add_signature(name)
+
     try:
-        if "retrieve_final" in global_scope:
-            try:
-                r = global_scope["retrieve_final"](q, protos=protos, mode="router")
-                out["retrieve_final_debug"] = {
-                    "type": type(r).__name__,
-                    "repr": repr(r)[:3000],
-                }
-            except Exception as e:
-                out["retrieve_final_debug"] = {
-                    "error": f"{type(e).__name__}: {e}",
-                    "traceback": traceback.format_exc(),
-                }
+        retrieve_final = global_scope.get("retrieve_final")
+
+        if retrieve_final is not None:
+            attempts = [
+                ("retrieve_final(q)", lambda: retrieve_final(q)),
+                ("retrieve_final(query=q)", lambda: retrieve_final(query=q)),
+                ("retrieve_final(q, protos)", lambda: retrieve_final(q, protos)),
+                ("retrieve_final(q, protos=protos)", lambda: retrieve_final(q, protos=protos)),
+                ("retrieve_final(q, protos=protos, mode='router')", lambda: retrieve_final(q, protos=protos, mode="router")),
+            ]
+
+            for label, call in attempts:
+                try:
+                    result = call()
+                    out["retrieve_final_attempts"].append({
+                        "call": label,
+                        "ok": True,
+                        "type": type(result).__name__,
+                        "repr": safe_repr(result, 4000),
+                    })
+                    break
+                except Exception as e:
+                    out["retrieve_final_attempts"].append({
+                        "call": label,
+                        "ok": False,
+                        "error": f"{type(e).__name__}: {e}",
+                    })
 
         if "answer" in global_scope:
             try:
@@ -808,11 +836,32 @@ def debug_rag():
                     use_web=True,
                 )
                 out["answer_debug"] = {
+                    "ok": True,
                     "type": type(a).__name__,
-                    "repr": repr(a)[:5000],
+                    "repr": safe_repr(a, 8000),
                 }
             except Exception as e:
                 out["answer_debug"] = {
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc(),
+                }
+
+        if "rag_student_answer" in global_scope:
+            try:
+                r = global_scope["rag_student_answer"](
+                    question=q,
+                    protos=protos,
+                    retrieval_mode="router",
+                )
+                out["rag_student_answer_debug"] = {
+                    "ok": True,
+                    "type": type(r).__name__,
+                    "repr": safe_repr(r, 8000),
+                }
+            except Exception as e:
+                out["rag_student_answer_debug"] = {
+                    "ok": False,
                     "error": f"{type(e).__name__}: {e}",
                     "traceback": traceback.format_exc(),
                 }
