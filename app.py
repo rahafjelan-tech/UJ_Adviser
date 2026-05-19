@@ -217,8 +217,8 @@ def load_notebook():
                     "hnsw", "nothing found on disk", "segment", "sqlite",
                     "no such table", "disk", "storage"
                 ]):
-                    print(f"[PATCH] Skipping broken collection '{collection}': {e}")
-                    return []
+                    print(f"[RAG ERROR] dense_topk failed for collection '{collection}': {type(e).__name__}: {e}")
+                    raise
                 raise
         global_scope["dense_topk"] = _safe_dense_topk
         print("[PATCH] dense_topk wrapped with HNSW fault-isolation.")
@@ -234,8 +234,8 @@ def load_notebook():
                     "hnsw", "nothing found on disk", "segment", "sqlite",
                     "no such table", "disk", "storage"
                 ]):
-                    print(f"[PATCH] Skipping broken BM25 collection '{collection}': {e}")
-                    return (None, [])
+                    print(f"[RAG ERROR] bm25_build failed for collection '{collection}': {type(e).__name__}: {e}")
+                    raise
                 raise
         global_scope["bm25_build"] = _safe_bm25_build
         print("[PATCH] bm25_build wrapped with HNSW fault-isolation.")
@@ -251,8 +251,8 @@ def load_notebook():
                     "hnsw", "nothing found on disk", "segment", "sqlite",
                     "no such table", "disk", "storage", "nonetype"
                 ]):
-                    print(f"[PATCH] Skipping broken BM25 topk '{collection}': {e}")
-                    return []
+                    print(f"[RAG ERROR] bm25_topk failed for collection '{collection}': {type(e).__name__}: {e}")
+                    raise
                 raise
         global_scope["bm25_topk"] = _safe_bm25_topk
         print("[PATCH] bm25_topk wrapped with HNSW fault-isolation.")
@@ -872,5 +872,69 @@ def debug_rag():
         out["error"] = f"{type(e).__name__}: {e}"
         out["traceback"] = traceback.format_exc()
         return jsonify(out), 500
+    
+@app.route("/debug-chroma-query")
+def debug_chroma_query():
+    q = request.args.get("q", "").strip()
+    collection_name = request.args.get("collection", "").strip()
+
+    out = {
+        "query": q,
+        "collection": collection_name,
+        "has_chroma": "chroma" in global_scope,
+        "has_embed_query": "embed_query" in global_scope,
+        "collection_exists": False,
+        "collection_count": None,
+        "raw_query": None,
+        "error": None,
+    }
+
+    try:
+        if not q:
+            out["error"] = "Missing q"
+            return jsonify(out), 400
+
+        chroma = global_scope.get("chroma")
+        if chroma is None:
+            out["error"] = "No chroma client in global_scope"
+            return jsonify(out), 500
+
+        if not collection_name:
+            collection_name = "faculty_offices"
+            out["collection"] = collection_name
+
+        col = chroma.get_collection(collection_name)
+        out["collection_exists"] = True
+        out["collection_count"] = col.count()
+
+        # Use the same embedding path as the notebook if available.
+        if "embed_query" in global_scope:
+            qvec = global_scope["embed_query"](q)
+            res = col.query(
+                query_embeddings=[qvec],
+                n_results=5,
+                include=["documents", "metadatas", "distances"]
+            )
+        else:
+            res = col.query(
+                query_texts=[q],
+                n_results=5,
+                include=["documents", "metadatas", "distances"]
+            )
+
+        out["raw_query"] = {
+            "documents": res.get("documents"),
+            "metadatas": res.get("metadatas"),
+            "distances": res.get("distances"),
+        }
+
+        return jsonify(out)
+
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+        out["traceback"] = traceback.format_exc()
+        return jsonify(out), 500
+    
+    
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True)
