@@ -129,7 +129,8 @@ def load_notebook():
             result = _orig(
                 query=query, protos=protos, mode=mode,
                 return_debug=return_debug,
-                use_deep=use_deep, use_web=use_web,
+                use_deep=use_deep,
+                use_web=use_web,
             )
             if not return_debug and not use_deep:
                 try:
@@ -141,8 +142,8 @@ def load_notebook():
         global_scope["answer"] = _student_answer_with_save
         print("[PATCH 6] answer() wrapped for student-path save only.")
 
-    # PATCH 7: Normalize all retrieval context_text values to strings.
-    # Root cause fix for: object of type 'int' has no len()
+    # PATCH 7: Global safety wrappers for non-SQL RAG answers.
+    # Fixes: object of type 'int' has no len()
     def _safe_text(value):
         if value is None:
             return ""
@@ -150,101 +151,61 @@ def load_notebook():
             return value
         if isinstance(value, (list, tuple, set)):
             return "\n".join(str(x) for x in value if x is not None)
-        if isinstance(value, dict):
-            return str(value)
         return str(value)
+
+    def _safe_sources(value):
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, (tuple, set)):
+            return list(value)
+        return [str(value)]
 
     def _normalize_retrieval_result(result):
         if isinstance(result, dict):
             result["context_text"] = _safe_text(result.get("context_text", ""))
-            result["sources"] = result.get("sources") or []
+            result["sources"] = _safe_sources(result.get("sources", []))
         return result
 
     _orig_context_answers_question = global_scope.get("context_answers_question")
     if _orig_context_answers_question is not None:
         def _safe_context_answers_question(question, context_text, _orig=_orig_context_answers_question):
             return _orig(_safe_text(question), _safe_text(context_text))
-
         global_scope["context_answers_question"] = _safe_context_answers_question
-        print("[PATCH 7A] context_answers_question made string-safe.")
+        print("[PATCH 7A] context_answers_question is string-safe.")
 
     _orig_retrieve_final = global_scope.get("retrieve_final")
     if _orig_retrieve_final is not None:
         def _safe_retrieve_final(*args, _orig=_orig_retrieve_final, **kwargs):
             result = _orig(*args, **kwargs)
             return _normalize_retrieval_result(result)
-
         global_scope["retrieve_final"] = _safe_retrieve_final
-        print("[PATCH 7B] retrieve_final wrapped with context normalization.")
+        print("[PATCH 7B] retrieve_final is string-safe.")
 
-    if "retrieve_final" in global_scope:
-        def _safe_retrieve_with_router_as_hint(
-            query,
-            protos,
-            mode="router",
-            route_decision=None,
-            use_bm25=True
+    _orig_llm_rag_answer = global_scope.get("llm_rag_answer_from_contexts")
+    if _orig_llm_rag_answer is not None:
+        def _safe_llm_rag_answer_from_contexts(
+            question,
+            kb_context="",
+            uj_context="",
+            web_context="",
+            sources_kb=None,
+            sources_uj=None,
+            sources_web=None,
+            _orig=_orig_llm_rag_answer
         ):
-            retrieve_final = global_scope["retrieve_final"]
-            context_answers_question = global_scope["context_answers_question"]
-
-            routed_result = retrieve_final(
-                query=query,
-                protos=protos,
-                mode=mode,
-                use_bm25=use_bm25
+            return _orig(
+                question=_safe_text(question),
+                kb_context=_safe_text(kb_context),
+                uj_context=_safe_text(uj_context),
+                web_context=_safe_text(web_context),
+                sources_kb=_safe_sources(sources_kb),
+                sources_uj=_safe_sources(sources_uj),
+                sources_web=_safe_sources(sources_web),
             )
-
-            routed_result = _normalize_retrieval_result(routed_result)
-            routed_context = _safe_text(routed_result.get("context_text", ""))
-            routed_sources = routed_result.get("sources", []) or []
-            routed_answered = context_answers_question(query, routed_context)
-
-            routed_result["retrieval_scope"] = "router_hint"
-            routed_result["router_hint_answered"] = routed_answered
-            routed_result["router_was_condition"] = False
-
-            if routed_answered:
-                routed_result["expanded_to_all_collections"] = False
-                return routed_result
-
-            try:
-                all_result = retrieve_final(
-                    query=query,
-                    protos=protos,
-                    mode="all",
-                    use_bm25=use_bm25
-                )
-
-                all_result = _normalize_retrieval_result(all_result)
-                all_context = _safe_text(all_result.get("context_text", ""))
-                all_sources = all_result.get("sources", []) or []
-                all_answered = context_answers_question(query, all_context)
-
-                all_result["retrieval_scope"] = "all_collections"
-                all_result["router_hint_answered"] = routed_answered
-                all_result["all_collections_answered"] = all_answered
-                all_result["expanded_to_all_collections"] = True
-                all_result["router_was_condition"] = False
-                all_result["router_hint_result"] = {
-                    "context_text": routed_context,
-                    "sources": routed_sources,
-                }
-
-                if all_answered:
-                    return all_result
-
-                if len(all_context) > len(routed_context):
-                    return all_result
-
-            except Exception as e:
-                routed_result["all_collections_error"] = str(e)
-
-            routed_result["expanded_to_all_collections"] = False
-            return routed_result
-
-        global_scope["retrieve_with_router_as_hint"] = _safe_retrieve_with_router_as_hint
-        print("[PATCH 7C] retrieve_with_router_as_hint replaced with string-safe version.")
+        global_scope["llm_rag_answer_from_contexts"] = _safe_llm_rag_answer_from_contexts
+        print("[PATCH 7C] llm_rag_answer_from_contexts is string-safe.")
 
     _orig_kb_agent_search_deep = global_scope.get("kb_agent_search_deep")
     if _orig_kb_agent_search_deep is not None:
@@ -262,14 +223,52 @@ def load_notebook():
 
             if hasattr(result, "sources"):
                 try:
-                    result.sources = result.sources or []
+                    result.sources = _safe_sources(result.sources)
                 except Exception:
                     pass
 
             return result
 
         global_scope["kb_agent_search_deep"] = _safe_kb_agent_search_deep
-        print("[PATCH 7D] kb_agent_search_deep wrapped with context normalization.")
+        print("[PATCH 7D] kb_agent_search_deep is string-safe.")
+
+    # PATCH 8: Emergency advisor fallback.
+    # If rag_student_answer crashes, retry using answer() with deep search disabled.
+    _orig_rag_student_answer = global_scope.get("rag_student_answer")
+    _orig_answer_for_fallback = global_scope.get("answer")
+
+    if _orig_rag_student_answer is not None and _orig_answer_for_fallback is not None:
+        def _safe_rag_student_answer(question, protos=None, retrieval_mode="router",
+                                     _orig_rag=_orig_rag_student_answer,
+                                     _fallback_answer=_orig_answer_for_fallback):
+            try:
+                return _orig_rag(
+                    question=_safe_text(question),
+                    protos=protos,
+                    retrieval_mode=retrieval_mode
+                )
+            except TypeError as e:
+                if "has no len" not in str(e):
+                    raise
+
+                print(f"[PATCH 8] rag_student_answer failed with len(int). Retrying via safe answer(): {e}")
+
+                fallback = _fallback_answer(
+                    query=_safe_text(question),
+                    protos=protos,
+                    mode="all",
+                    return_debug=False,
+                    use_deep=False,
+                    use_web=True
+                )
+
+                if isinstance(fallback, dict):
+                    return fallback
+
+                return {"answer": _safe_text(fallback)}
+
+        global_scope["rag_student_answer"] = _safe_rag_student_answer
+        print("[PATCH 8] rag_student_answer wrapped with safe fallback.")
 
     print("[app.py] All patches applied successfully.")
 
