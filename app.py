@@ -44,7 +44,14 @@ def load_notebook():
                     continue
                 exec(cleaned_code, global_scope)
             except Exception as e:
-                print("خطأ في تنفيذ خلية من الـ notebook:", e)
+                print("=" * 80)
+                print(f"[NOTEBOOK LOAD ERROR] Cell index: {idx}")
+                print("[CELL SOURCE START]")
+                print(cell.source[:3000])
+                print("[CELL SOURCE END]")
+                traceback.print_exc()
+                print("=" * 80)
+                raise RuntimeError(f"Notebook failed while loading cell {idx}") from e
 
     # PATCH 1: dense_topk — fault-isolate broken HNSW collections
     _orig_dense_topk = global_scope.get("dense_topk")
