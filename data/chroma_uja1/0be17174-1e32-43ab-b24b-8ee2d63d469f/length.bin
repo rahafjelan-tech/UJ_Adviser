@@ -1,1 +1,0 @@
-invalid type: string "التخصص: المالية والاقتصاد\nمعرف التخصص: MAJ_finance\nالكلية: كلية الأعمال\nمعرف الكلية: COL_business\nالساعات المطلوبة قبل التخصيص: 27\nالمتطلبات: SCMT 110, SCST 121, BUFE 121", expected f64 expected i64لمتطلبات: غير مذكورة في هذا المصدر", expected i64ngs\n
