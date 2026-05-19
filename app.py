@@ -406,6 +406,29 @@ def _chroma_health():
     return result
 
 
+def _safe_key_info(value):
+    if not value:
+        return {
+            "present": False,
+            "length": 0,
+            "starts_with": None,
+            "ends_with": None,
+            "has_quotes": False,
+            "has_whitespace": False,
+        }
+
+    text = str(value)
+    stripped = text.strip()
+    return {
+        "present": bool(stripped),
+        "length": len(stripped),
+        "starts_with": stripped[:8],
+        "ends_with": stripped[-4:],
+        "has_quotes": stripped.startswith(("'", '"')) or stripped.endswith(("'", '"')),
+        "has_whitespace": text != stripped,
+    }
+
+
 # =========================
 # HTML pages
 # =========================
@@ -450,6 +473,11 @@ def health():
         "chroma_expected_collections": chroma_health["expected_collections"],
         "chroma_missing_expected": chroma_health["missing_expected"],
         "chroma_error": chroma_health["error"],
+        "openai_key": {
+            "environment": _safe_key_info(os.environ.get("OPENAI_API_KEY")),
+            "notebook_value": _safe_key_info(global_scope.get("openai_api_key_value")),
+            "client_loaded": global_scope.get("client") is not None,
+        },
     })
 
 
