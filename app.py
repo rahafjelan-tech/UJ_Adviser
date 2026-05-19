@@ -22,7 +22,44 @@ os.chdir(BASE_DIR)
 
 NOTEBOOK_PATH_REPLACEMENTS = {
     '"data/vector_database_updated.zip"': '"data/vector_database_updated (1).zip"',
+    "chroma.list_collections()": "_safe_chroma_list_collections(chroma)",
 }
+
+
+class _CollectionRef:
+    def __init__(self, name):
+        self.name = name
+
+
+def _safe_chroma_list_collections(client):
+    try:
+        return client.list_collections()
+    except Exception as e:
+        if "collections.topic" not in str(e):
+            raise
+
+        expected = global_scope.get("ALL_COLLECTIONS") or [
+            "transfer_rules",
+            "regulations",
+            "degree_plans",
+            "student_helpers",
+            "faculty_offices",
+            "academic_calendar",
+        ]
+
+        available = []
+        for name in expected:
+            try:
+                client.get_collection(name)
+                available.append(_CollectionRef(name))
+            except Exception:
+                pass
+
+        print(
+            "[PATCH] chroma.list_collections() schema mismatch "
+            f"({e}); using get_collection fallback: {[c.name for c in available]}"
+        )
+        return available
 
 # =========================
 # Notebook loader
@@ -40,7 +77,9 @@ def load_notebook():
     with NOTEBOOK_PATH.open("r", encoding="utf-8") as f:
         nb = nbformat.read(f, as_version=4)
 
-    global_scope = {}
+    global_scope = {
+        "_safe_chroma_list_collections": _safe_chroma_list_collections,
+    }
 
     for idx, cell in enumerate(nb.cells):
         if cell.cell_type == "code":
@@ -356,7 +395,7 @@ def _chroma_health():
         return result
 
     try:
-        collections = client.list_collections()
+        collections = _safe_chroma_list_collections(client)
         names = [getattr(col, "name", str(col)) for col in collections]
         result["collections"] = names
         result["count"] = len(names)
