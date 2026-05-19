@@ -252,33 +252,48 @@ def student():
 # =========================
 @app.route("/advisor", methods=["POST"])
 def advisor():
-    data     = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True) or {}
     question = data.get("message", "").strip()
 
     if not question:
         return jsonify({"reply": "الرجاء إدخال سؤال."}), 400
+
+    normalized_q = question.replace("؟", "").replace("?", "").strip().lower()
+
+    identity_questions = [
+        "من انت",
+        "من أنت",
+        "مين انت",
+        "مين أنت",
+        "ما اسمك",
+        "وش اسمك",
+        "عرفني بنفسك"
+    ]
+
+    if normalized_q in identity_questions:
+        return jsonify({
+            "reply": "أنا مساعد المرشد الأكاديمي. أستطيع مساعدتك في الاستفسارات الأكاديمية، بيانات الطلاب، الحالات المتعثرة، التحصيل، الحضور، والخطط الدراسية."
+        })
+
     if "rag_student_answer" not in global_scope:
         return jsonify({"reply": "دالة rag_student_answer غير موجودة"}), 500
 
     try:
         protos = global_scope.get("protos", None)
+
         result = global_scope["rag_student_answer"](
-            question=question, protos=protos,
+            question=question,
+            protos=protos,
             retrieval_mode="router"
         )
+
         if isinstance(result, dict):
             return jsonify({"reply": result.get("answer", "لا يوجد رد")})
-        return jsonify({"reply": str(result)})
-    except Exception as e:
-        err_str = str(e)
-        if any(kw in err_str.lower() for kw in ["hnsw", "nothing found on disk", "segment", "disk"]):
-            return jsonify({"reply": (
-                "⚠️ تعذّر الوصول إلى قاعدة بيانات المتجهات (ChromaDB). "
-                "تأكد من وجود ملف vector_database_updated.zip داخل مجلد data/ "
-                "ثم أعد تشغيل الخادم."
-            )}), 500
-        return jsonify({"reply": f"خطأ في معالجة سؤال المرشد: {err_str}"}), 500
 
+        return jsonify({"reply": str(result)})
+
+    except Exception as e:
+        return jsonify({"reply": f"خطأ في معالجة سؤال المرشد: {str(e)}"}), 500
 
 # =========================
 # Advisor Dashboard API  ← NEW (from ZIP)
