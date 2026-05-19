@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: ujad-advising
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --timeout 180 --workers 1
+    plan: standard
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
