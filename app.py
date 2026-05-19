@@ -108,22 +108,68 @@ def _prepare_notebook_code(source):
 
 
 def _ensure_chroma_schema_compat(db_dir):
-    db_path = Path(db_dir) / "chroma.sqlite3"
-    if not db_path.exists():
+    base = Path(db_dir)
+
+    candidates = []
+
+    direct = base / "chroma.sqlite3"
+    if direct.exists():
+        candidates.append(direct)
+
+    if base.exists():
+        candidates.extend(base.rglob("chroma.sqlite3"))
+
+    # remove duplicates, preserve order
+    seen = set()
+    db_paths = []
+    for p in candidates:
+        rp = p.resolve()
+        if rp not in seen:
+            seen.add(rp)
+            db_paths.append(p)
+
+    if not db_paths:
+        print(f"[PATCH] No chroma.sqlite3 found under {base}")
         return
 
-    conn = sqlite3.connect(db_path)
-    try:
-        columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(collections)").fetchall()
-        }
-        if "topic" not in columns:
-            conn.execute("ALTER TABLE collections ADD COLUMN topic TEXT")
-            conn.commit()
-            print("[PATCH] Added missing Chroma collections.topic column.")
-    finally:
-        conn.close()
+    for db_path in db_paths:
+        print(f"[PATCH] Checking Chroma sqlite schema: {db_path}")
 
+        conn = sqlite3.connect(db_path)
+        try:
+            def _table_exists(table_name):
+                row = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (table_name,)
+                ).fetchone()
+                return row is not None
+
+            def _ensure_column(table_name, column_name, column_type="TEXT"):
+                if not _table_exists(table_name):
+                    print(f"[PATCH] Chroma table missing in {db_path}: {table_name}")
+                    return
+
+                columns = {
+                    row[1]
+                    for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+                }
+
+                if column_name not in columns:
+                    conn.execute(
+                        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+                    )
+                    print(
+                        f"[PATCH] Added missing Chroma column "
+                        f"{table_name}.{column_name} in {db_path}"
+                    )
+
+            _ensure_column("collections", "topic", "TEXT")
+            _ensure_column("segments", "topic", "TEXT")
+
+            conn.commit()
+
+        finally:
+            conn.close()
 
 class _CollectionRef:
     def __init__(self, name):
