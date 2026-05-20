@@ -636,7 +636,98 @@ def _probe_internal_retrieval(question, mode="all", include_preview=False):
         }
 
 
+def _quick_grounded_answer(question, context_kb, sources_kb):
+    context_kb = _as_text(context_kb).strip()
+    sources_kb = _compact_sources(sources_kb, limit=8)
+    if not context_kb:
+        return ""
+
+    context_for_model = context_kb[:6000]
+    client = global_scope.get("client")
+    model = global_scope.get("OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
+
+    if client is not None:
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "أجب بالعربية فقط اعتمادًا على النص الداخلي المرفق. "
+                            "لا تستخدم الويب ولا تضف معلومات غير موجودة في النص. "
+                            "إذا كان النص لا يحتوي الإجابة، قل ذلك بوضوح."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"السؤال:\n{question}\n\n"
+                            f"النص الداخلي من قاعدة المتجهات:\n{context_for_model}\n\n"
+                            f"المصادر:\n{sources_kb}"
+                        ),
+                    },
+                ],
+                temperature=0.0,
+                max_tokens=260,
+                timeout=25,
+            )
+            answer = (resp.choices[0].message.content or "").strip()
+            if answer:
+                return answer
+        except Exception as e:
+            print(f"[VECTOR FIRST] Quick grounded LLM failed; returning vector excerpt: {e}")
+
+    excerpt = context_kb[:1800].strip()
+    return (
+        "وجدت معلومات مرتبطة في قاعدة المعرفة الداخلية، لكن تعذر صياغتها بالنموذج الآن. "
+        "أقرب نص مسترجع:\n\n"
+        + excerpt
+    )
+
+
 def _internal_vector_answer(question, protos):
+    retrieval_fn = global_scope.get("retrieve_with_router_as_hint") or global_scope.get("retrieve_final")
+
+    if retrieval_fn is not None:
+        try:
+            if "retrieve_with_router_as_hint" in global_scope:
+                retrieval_result = retrieval_fn(
+                    query=question,
+                    protos=protos,
+                    mode="router",
+                    route_decision=None,
+                    use_bm25=True,
+                )
+            else:
+                retrieval_result = retrieval_fn(
+                    query=question,
+                    protos=protos,
+                    mode="router",
+                    use_bm25=True,
+                )
+
+            context_kb = _as_text(retrieval_result.get("context_text", "")) if isinstance(retrieval_result, dict) else ""
+            sources_kb = retrieval_result.get("sources", []) if isinstance(retrieval_result, dict) else []
+
+            if context_kb.strip() and _as_source_list(sources_kb):
+                answer_text = _quick_grounded_answer(question, context_kb, sources_kb)
+
+                return {
+                    "answer": _as_text(answer_text),
+                    "sources": {"kb": sources_kb, "uj_web": [], "full_web": []},
+                    "contexts": {"kb": context_kb, "uj_web": "", "full_web": ""},
+                    "trace": {
+                        "kb_answered": True,
+                        "uj_web_answered": False,
+                        "full_web_answered": False,
+                        "web_skipped_reason": "internal_vector_context_found",
+                    },
+                    "retrieval": retrieval_result,
+                }
+        except Exception as e:
+            print(f"[VECTOR FIRST] Internal retrieval failed, trying web fallback flow: {e}")
+
     answer_fn = global_scope.get("answer")
     if answer_fn is None:
         return {"answer": "لم يتم تحميل نموذج الإجابة من قاعدة المعرفة الداخلية بعد."}
@@ -646,7 +737,7 @@ def _internal_vector_answer(question, protos):
         protos=protos,
         mode="all",
         return_debug=True,
-        use_deep=True,
+        use_deep=False,
         use_web=True,
     )
 
@@ -842,7 +933,7 @@ def student():
 def debug_rag():
     question = request.args.get("q", "ما متطلبات تخصص الذكاء الاصطناعي؟").strip()
     mode = request.args.get("mode", "all").strip() or "all"
-    return jsonify({
+    payload = {
         "question": question,
         "mode": mode,
         "retrieval": _probe_internal_retrieval(
@@ -850,14 +941,20 @@ def debug_rag():
             mode=mode,
             include_preview=True,
         ),
-        "answer_flow": _answer_flow_probe(question),
         "chroma": _chroma_health(),
         "openai_key": {
             "environment": _safe_key_info(os.environ.get("OPENAI_API_KEY")),
             "notebook_value": _safe_key_info(global_scope.get("openai_api_key_value")),
             "client_loaded": global_scope.get("client") is not None,
         },
-    })
+    }
+
+    if request.args.get("answer", "").lower() in {"1", "true", "yes"}:
+        payload["answer_flow"] = _answer_flow_probe(question)
+    else:
+        payload["answer_flow"] = "skipped; add &answer=1 to run the slower full answer flow"
+
+    return jsonify(payload)
 
 
 @app.route("/advisor", methods=["POST"])
