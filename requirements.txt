@@ -1,7 +1,7 @@
 flask==2.3.3
 flask-cors==4.0.0
 nbformat==5.9.2
-chromadb==0.4.24
+chromadb==1.5.9
 sentence-transformers==3.0.0
 pandas==2.2.2
 tqdm==4.66.4
