@@ -5,6 +5,7 @@ import nbformat
 import sqlite3
 import os
 import re
+import shutil
 import traceback
 from pathlib import Path
 
@@ -26,7 +27,7 @@ NOTEBOOK_PATH_REPLACEMENTS = {
     '"data/vector_database_updated.zip"': '"data/vector_database_updated (1).zip"',
     "chroma.list_collections()": "_safe_chroma_list_collections(chroma)",
     "chroma = chromadb.PersistentClient(path=PERSIST_DIR)": (
-        "_ensure_chroma_schema_compat(PERSIST_DIR)\n"
+        "_ensure_chroma_schema_compat(CHROMA_DIR)\n"
         "chroma = chromadb.PersistentClient(path=PERSIST_DIR)"
     ),
 }
@@ -108,58 +109,25 @@ def _prepare_notebook_code(source):
 
 
 def _ensure_chroma_schema_compat(db_dir):
-    base = Path(db_dir)
-
-    db_paths = []
-    direct = base / "chroma.sqlite3"
-
-    if direct.exists():
-        db_paths.append(direct)
-
-    if base.exists():
-        for p in base.rglob("chroma.sqlite3"):
-            if p not in db_paths:
-                db_paths.append(p)
-
-    if not db_paths:
-        print(f"[CHROMA PATCH] No chroma.sqlite3 found under {base}")
+    db_path = Path(db_dir) / "chroma.sqlite3"
+    if not db_path.exists():
         return
 
-    for db_path in db_paths:
-        print(f"[CHROMA PATCH] Checking SQLite schema: {db_path}")
-
-        conn = sqlite3.connect(db_path)
-        try:
-            def table_exists(table_name):
-                row = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                    (table_name,)
-                ).fetchone()
-                return row is not None
-
-            def ensure_column(table_name, column_name, column_type="TEXT"):
-                if not table_exists(table_name):
-                    print(f"[CHROMA PATCH] Table missing: {table_name} in {db_path}")
-                    return
-
-                columns = {
-                    row[1]
-                    for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-                }
-
-                if column_name not in columns:
-                    conn.execute(
-                        f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
-                    )
-                    print(f"[CHROMA PATCH] Added {table_name}.{column_name} in {db_path}")
-
-            ensure_column("collections", "topic", "TEXT")
-            ensure_column("segments", "topic", "TEXT")
-
+    conn = sqlite3.connect(db_path)
+    try:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(collections)").fetchall()
+        }
+        if "schema_str" in columns or "config_json_str" in columns:
+            return
+        if "topic" not in columns:
+            conn.execute("ALTER TABLE collections ADD COLUMN topic TEXT")
             conn.commit()
+            print("[PATCH] Added missing Chroma collections.topic column.")
+    finally:
+        conn.close()
 
-        finally:
-            conn.close()
+
 class _CollectionRef:
     def __init__(self, name):
         self.name = name
@@ -167,7 +135,11 @@ class _CollectionRef:
 
 def _safe_chroma_list_collections(client):
     try:
-        return client.list_collections()
+        collections = client.list_collections()
+        return [
+            col if hasattr(col, "name") else _CollectionRef(str(col))
+            for col in collections
+        ]
     except Exception as e:
         if "collections.topic" not in str(e):
             raise
@@ -252,8 +224,8 @@ def load_notebook():
                     "hnsw", "nothing found on disk", "segment", "sqlite",
                     "no such table", "disk", "storage"
                 ]):
-                    print(f"[RAG ERROR] dense_topk failed for collection '{collection}': {type(e).__name__}: {e}")
-                    raise
+                    print(f"[PATCH] Skipping broken collection '{collection}': {e}")
+                    return []
                 raise
         global_scope["dense_topk"] = _safe_dense_topk
         print("[PATCH] dense_topk wrapped with HNSW fault-isolation.")
@@ -269,8 +241,8 @@ def load_notebook():
                     "hnsw", "nothing found on disk", "segment", "sqlite",
                     "no such table", "disk", "storage"
                 ]):
-                    print(f"[RAG ERROR] bm25_build failed for collection '{collection}': {type(e).__name__}: {e}")
-                    raise
+                    print(f"[PATCH] Skipping broken BM25 collection '{collection}': {e}")
+                    return (None, [])
                 raise
         global_scope["bm25_build"] = _safe_bm25_build
         print("[PATCH] bm25_build wrapped with HNSW fault-isolation.")
@@ -286,8 +258,8 @@ def load_notebook():
                     "hnsw", "nothing found on disk", "segment", "sqlite",
                     "no such table", "disk", "storage", "nonetype"
                 ]):
-                    print(f"[RAG ERROR] bm25_topk failed for collection '{collection}': {type(e).__name__}: {e}")
-                    raise
+                    print(f"[PATCH] Skipping broken BM25 topk '{collection}': {e}")
+                    return []
                 raise
         global_scope["bm25_topk"] = _safe_bm25_topk
         print("[PATCH] bm25_topk wrapped with HNSW fault-isolation.")
@@ -560,6 +532,212 @@ def _safe_key_info(value):
     }
 
 
+def _as_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return "\n".join(str(item) for item in value if item is not None)
+    return str(value)
+
+
+def _as_source_list(value):
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        merged = []
+        for items in value.values():
+            merged.extend(_as_source_list(items))
+        return merged
+    if isinstance(value, list):
+        return [str(item) for item in value if item is not None]
+    if isinstance(value, (tuple, set)):
+        return [str(item) for item in value if item is not None]
+    return [str(value)]
+
+
+def _compact_sources(value, limit=12):
+    return [source[:500] for source in _as_source_list(value)[:limit]]
+
+
+def _student_data_question(question):
+    q = _as_text(question).strip().lower()
+    if re.search(r"\b\d{6,}\b", q):
+        return True
+
+    student_markers = [
+        "بيانات الطالب",
+        "بيانات الطالبة",
+        "سجل الطالب",
+        "سجل الطالبة",
+        "معدل",
+        "gpa",
+        "حضور",
+        "غياب",
+        "درجات",
+        "متعثر",
+        "متعثره",
+        "متعثرة",
+        "انذار",
+        "إنذار",
+        "درسها",
+        "موادها",
+    ]
+    return any(marker in q for marker in student_markers)
+
+
+def _summarize_retrieval_result(result, include_preview=False):
+    if not isinstance(result, dict):
+        return {
+            "ok": False,
+            "error": f"retrieve_final returned {type(result).__name__}",
+            "context_length": 0,
+            "sources": [],
+        }
+
+    context = _as_text(result.get("context_text", ""))
+    summary = {
+        "ok": bool(context.strip()),
+        "error": None,
+        "mode": result.get("mode"),
+        "variant": result.get("variant"),
+        "route_mode": result.get("route_mode"),
+        "route_candidates": _compact_sources(result.get("route_candidates"), limit=8),
+        "retrieval_scope": result.get("retrieval_scope"),
+        "context_length": len(context),
+        "sources": _compact_sources(result.get("sources")),
+        "source_count": len(_as_source_list(result.get("sources"))),
+    }
+    if include_preview:
+        summary["context_preview"] = context[:1600]
+    return summary
+
+
+def _probe_internal_retrieval(question, mode="all", include_preview=False):
+    fn = global_scope.get("retrieve_final")
+    if fn is None:
+        return {
+            "ok": False,
+            "error": "retrieve_final is not loaded",
+            "context_length": 0,
+            "sources": [],
+        }
+
+    try:
+        result = fn(query=question, protos=global_scope.get("protos"), mode=mode)
+        return _summarize_retrieval_result(result, include_preview=include_preview)
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "context_length": 0,
+            "sources": [],
+        }
+
+
+def _internal_vector_answer(question, protos):
+    answer_fn = global_scope.get("answer")
+    if answer_fn is None:
+        return {"answer": "لم يتم تحميل نموذج الإجابة من قاعدة المعرفة الداخلية بعد."}
+
+    result = answer_fn(
+        query=question,
+        protos=protos,
+        mode="all",
+        return_debug=True,
+        use_deep=True,
+        use_web=True,
+    )
+
+    if not isinstance(result, dict):
+        return {"answer": _as_text(result)}
+
+    sources = result.get("sources", {}) or {}
+    contexts = result.get("contexts", {}) or {}
+    trace = result.get("trace", {}) or {}
+
+    kb_sources = sources.get("kb", []) if isinstance(sources, dict) else sources
+    uj_sources = sources.get("uj_web", []) if isinstance(sources, dict) else []
+    web_sources = sources.get("full_web", []) if isinstance(sources, dict) else []
+    kb_context = contexts.get("kb", "") if isinstance(contexts, dict) else ""
+    uj_context = contexts.get("uj_web", "") if isinstance(contexts, dict) else ""
+    web_context = contexts.get("full_web", "") if isinstance(contexts, dict) else ""
+
+    has_internal_context = (
+        bool(_as_source_list(kb_sources))
+        or len(_as_text(kb_context).strip()) >= 120
+        or bool(isinstance(trace, dict) and trace.get("kb_answered"))
+    )
+
+    has_web_context = (
+        bool(_as_source_list(uj_sources))
+        or bool(_as_source_list(web_sources))
+        or len(_as_text(uj_context).strip()) >= 120
+        or len(_as_text(web_context).strip()) >= 120
+    )
+
+    if has_internal_context or has_web_context:
+        return result
+
+    return {
+        "answer": "لا توجد معلومات كافية في قاعدة المعرفة الداخلية أو مصادر الويب المتاحة للإجابة عن هذا السؤال بدقة.",
+        "sources": {"kb": [], "uj_web": [], "full_web": []},
+        "trace": trace,
+    }
+
+
+def _answer_flow_probe(question):
+    answer_fn = global_scope.get("answer")
+    if answer_fn is None:
+        return {"ok": False, "error": "answer is not loaded"}
+
+    try:
+        result = answer_fn(
+            query=question,
+            protos=global_scope.get("protos"),
+            mode="all",
+            return_debug=True,
+            use_deep=True,
+            use_web=True,
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    if not isinstance(result, dict):
+        return {
+            "ok": bool(_as_text(result).strip()),
+            "answer_preview": _as_text(result)[:700],
+            "error": None,
+        }
+
+    contexts = result.get("contexts", {}) or {}
+    sources = result.get("sources", {}) or {}
+    trace = result.get("trace", {}) or {}
+
+    return {
+        "ok": True,
+        "answer_preview": _as_text(result.get("answer", ""))[:700],
+        "trace": trace,
+        "context_lengths": {
+            "kb": len(_as_text(contexts.get("kb", ""))) if isinstance(contexts, dict) else 0,
+            "uj_web": len(_as_text(contexts.get("uj_web", ""))) if isinstance(contexts, dict) else 0,
+            "full_web": len(_as_text(contexts.get("full_web", ""))) if isinstance(contexts, dict) else 0,
+        },
+        "source_counts": {
+            "kb": len(_as_source_list(sources.get("kb", []))) if isinstance(sources, dict) else 0,
+            "uj_web": len(_as_source_list(sources.get("uj_web", []))) if isinstance(sources, dict) else 0,
+            "full_web": len(_as_source_list(sources.get("full_web", []))) if isinstance(sources, dict) else 0,
+        },
+        "sources": {
+            "kb": _compact_sources(sources.get("kb", [])) if isinstance(sources, dict) else [],
+            "uj_web": _compact_sources(sources.get("uj_web", [])) if isinstance(sources, dict) else [],
+            "full_web": _compact_sources(sources.get("full_web", [])) if isinstance(sources, dict) else [],
+        },
+        "error": None,
+    }
+
+
 # =========================
 # HTML pages
 # =========================
@@ -589,7 +767,7 @@ def employee_page():
 @app.route("/health")
 def health():
     chroma_health = _chroma_health()
-    return jsonify({
+    payload = {
         "status": "ok" if not notebook_error else "notebook_error",
         "notebook_error": notebook_error,
         "notebook_warnings": notebook_warnings,
@@ -610,7 +788,17 @@ def health():
             "notebook_value": _safe_key_info(global_scope.get("openai_api_key_value")),
             "client_loaded": global_scope.get("client") is not None,
         },
-    })
+    }
+
+    if request.args.get("probe", "").lower() in {"1", "true", "yes"}:
+        q = request.args.get("q", "ما متطلبات تخصص الذكاء الاصطناعي؟").strip()
+        payload["retrieval_probe"] = _probe_internal_retrieval(
+            question=q,
+            mode=request.args.get("mode", "all").strip() or "all",
+            include_preview=True,
+        )
+
+    return jsonify(payload)
 
 
 # =========================
@@ -650,6 +838,28 @@ def student():
 # =========================
 # Advisor chat API
 # =========================
+@app.route("/debug-rag")
+def debug_rag():
+    question = request.args.get("q", "ما متطلبات تخصص الذكاء الاصطناعي؟").strip()
+    mode = request.args.get("mode", "all").strip() or "all"
+    return jsonify({
+        "question": question,
+        "mode": mode,
+        "retrieval": _probe_internal_retrieval(
+            question=question,
+            mode=mode,
+            include_preview=True,
+        ),
+        "answer_flow": _answer_flow_probe(question),
+        "chroma": _chroma_health(),
+        "openai_key": {
+            "environment": _safe_key_info(os.environ.get("OPENAI_API_KEY")),
+            "notebook_value": _safe_key_info(global_scope.get("openai_api_key_value")),
+            "client_loaded": global_scope.get("client") is not None,
+        },
+    })
+
+
 @app.route("/advisor", methods=["POST"])
 def advisor():
     data = request.get_json(silent=True) or {}
@@ -675,18 +885,27 @@ def advisor():
             "reply": "أنا مساعد المرشد الأكاديمي. أستطيع مساعدتك في الاستفسارات الأكاديمية، بيانات الطلاب، الحالات المتعثرة، التحصيل، الحضور، والخطط الدراسية."
         })
 
-    if "rag_student_answer" not in global_scope:
+    use_student_path = _student_data_question(question)
+
+    if use_student_path and "rag_student_answer" not in global_scope:
         detail = f"\n\nتفاصيل الخطأ: {notebook_error}" if notebook_error else ""
         return jsonify({"reply": "لم يتم تحميل نموذج المرشد بعد. تحقق من سجلات Render لمعرفة سبب تعطل notebook." + detail}), 503
+
+    if not use_student_path and "answer" not in global_scope:
+        detail = f"\n\nتفاصيل الخطأ: {notebook_error}" if notebook_error else ""
+        return jsonify({"reply": "لم يتم تحميل قاعدة المعرفة الداخلية بعد. تحقق من سجلات Render لمعرفة سبب تعطل notebook." + detail}), 503
 
     try:
         protos = global_scope.get("protos", None)
 
-        result = global_scope["rag_student_answer"](
-            question=question,
-            protos=protos,
-            retrieval_mode="router"
-        )
+        if use_student_path:
+            result = global_scope["rag_student_answer"](
+                question=question,
+                protos=protos,
+                retrieval_mode="router"
+            )
+        else:
+            result = _internal_vector_answer(question, protos)
 
         if isinstance(result, dict):
             return jsonify({"reply": result.get("answer", "لا يوجد رد")})
@@ -784,192 +1003,23 @@ def advisor_dashboard_data():
         conn.close()
 
 
-@app.route("/debug-rag")
-def debug_rag():
-    import inspect
-
-    q = request.args.get("q", "").strip()
-    protos = global_scope.get("protos")
-
-    out = {
-        "query": q,
-        "notebook_error": notebook_error,
-        "has_chroma": "chroma" in global_scope,
-        "has_protos": "protos" in global_scope,
+# =========================
+# Debug
+# =========================
+@app.route("/debug-scope")
+def debug_scope():
+    return jsonify({
+        "loaded_names": list(global_scope.keys()),
         "has_answer": "answer" in global_scope,
-        "has_retrieve_final": "retrieve_final" in global_scope,
-        "has_retrieve_with_router_as_hint": "retrieve_with_router_as_hint" in global_scope,
-        "has_rag_student_answer": "rag_student_answer" in global_scope,
-        "signatures": {},
-        "retrieve_final_attempts": [],
-        "answer_debug": None,
-        "rag_student_answer_debug": None,
-        "error": None,
-    }
+        "has_global_student_answering": "global_student_answering" in global_scope,
+        "has_protos": "protos" in global_scope,
+        "has_vectorstore": "vectorstore" in global_scope,
+        "has_retriever": "retriever" in global_scope,
+        "has_documents": "documents" in global_scope,
+        "has_chunks": "chunks" in global_scope,
+        "has_collection": "collection" in global_scope,
+    })
 
-    def safe_repr(x, limit=5000):
-        try:
-            return repr(x)[:limit]
-        except Exception as e:
-            return f"<repr failed: {type(e).__name__}: {e}>"
 
-    def add_signature(name):
-        fn = global_scope.get(name)
-        if fn is None:
-            out["signatures"][name] = None
-            return
-        try:
-            out["signatures"][name] = str(inspect.signature(fn))
-        except Exception as e:
-            out["signatures"][name] = f"signature_error: {type(e).__name__}: {e}"
-
-    for name in [
-        "retrieve_final",
-        "retrieve_with_router_as_hint",
-        "answer",
-        "rag_student_answer",
-        "context_answers_question",
-    ]:
-        add_signature(name)
-
-    try:
-        retrieve_final = global_scope.get("retrieve_final")
-
-        if retrieve_final is not None:
-            attempts = [
-                ("retrieve_final(q)", lambda: retrieve_final(q)),
-                ("retrieve_final(query=q)", lambda: retrieve_final(query=q)),
-                ("retrieve_final(q, protos)", lambda: retrieve_final(q, protos)),
-                ("retrieve_final(q, protos=protos)", lambda: retrieve_final(q, protos=protos)),
-                ("retrieve_final(q, protos=protos, mode='router')", lambda: retrieve_final(q, protos=protos, mode="router")),
-            ]
-
-            for label, call in attempts:
-                try:
-                    result = call()
-                    out["retrieve_final_attempts"].append({
-                        "call": label,
-                        "ok": True,
-                        "type": type(result).__name__,
-                        "repr": safe_repr(result, 4000),
-                    })
-                    break
-                except Exception as e:
-                    out["retrieve_final_attempts"].append({
-                        "call": label,
-                        "ok": False,
-                        "error": f"{type(e).__name__}: {e}",
-                    })
-
-        if "answer" in global_scope:
-            try:
-                a = global_scope["answer"](
-                    query=q,
-                    protos=protos,
-                    mode="router",
-                    return_debug=True,
-                    use_web=True,
-                )
-                out["answer_debug"] = {
-                    "ok": True,
-                    "type": type(a).__name__,
-                    "repr": safe_repr(a, 8000),
-                }
-            except Exception as e:
-                out["answer_debug"] = {
-                    "ok": False,
-                    "error": f"{type(e).__name__}: {e}",
-                    "traceback": traceback.format_exc(),
-                }
-
-        if "rag_student_answer" in global_scope:
-            try:
-                r = global_scope["rag_student_answer"](
-                    question=q,
-                    protos=protos,
-                    retrieval_mode="router",
-                )
-                out["rag_student_answer_debug"] = {
-                    "ok": True,
-                    "type": type(r).__name__,
-                    "repr": safe_repr(r, 8000),
-                }
-            except Exception as e:
-                out["rag_student_answer_debug"] = {
-                    "ok": False,
-                    "error": f"{type(e).__name__}: {e}",
-                    "traceback": traceback.format_exc(),
-                }
-
-        return jsonify(out)
-
-    except Exception as e:
-        out["error"] = f"{type(e).__name__}: {e}"
-        out["traceback"] = traceback.format_exc()
-        return jsonify(out), 500
-    
-@app.route("/debug-chroma-query")
-def debug_chroma_query():
-    q = request.args.get("q", "").strip()
-    collection_name = request.args.get("collection", "").strip()
-
-    out = {
-        "query": q,
-        "collection": collection_name,
-        "has_chroma": "chroma" in global_scope,
-        "has_embed_query": "embed_query" in global_scope,
-        "collection_exists": False,
-        "collection_count": None,
-        "raw_query": None,
-        "error": None,
-    }
-
-    try:
-        if not q:
-            out["error"] = "Missing q"
-            return jsonify(out), 400
-
-        chroma = global_scope.get("chroma")
-        if chroma is None:
-            out["error"] = "No chroma client in global_scope"
-            return jsonify(out), 500
-
-        if not collection_name:
-            collection_name = "faculty_offices"
-            out["collection"] = collection_name
-
-        col = chroma.get_collection(collection_name)
-        out["collection_exists"] = True
-        out["collection_count"] = col.count()
-
-        # Use the same embedding path as the notebook if available.
-        if "embed_query" in global_scope:
-            qvec = global_scope["embed_query"](q)
-            res = col.query(
-                query_embeddings=[qvec],
-                n_results=5,
-                include=["documents", "metadatas", "distances"]
-            )
-        else:
-            res = col.query(
-                query_texts=[q],
-                n_results=5,
-                include=["documents", "metadatas", "distances"]
-            )
-
-        out["raw_query"] = {
-            "documents": res.get("documents"),
-            "metadatas": res.get("metadatas"),
-            "distances": res.get("distances"),
-        }
-
-        return jsonify(out)
-
-    except Exception as e:
-        out["error"] = f"{type(e).__name__}: {e}"
-        out["traceback"] = traceback.format_exc()
-        return jsonify(out), 500
-    
-    
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True)
