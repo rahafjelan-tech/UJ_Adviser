@@ -768,6 +768,47 @@ def _relevant_excerpt(text, terms, max_chars=1600):
     return excerpt[:max_chars].strip()
 
 
+def _clean_vector_text_for_user(text):
+    cleaned_lines = []
+    for line in _as_text(text).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.match(r"^\[[^\]]+\]\s*\([^)]+\)$", line):
+            continue
+        if line.startswith(("رقم الصفحة:", "المحتوى:", "source:", "collection=")):
+            continue
+        cleaned_lines.append(line)
+
+    cleaned = "\n".join(cleaned_lines)
+    cleaned = re.sub(r"\[([^\]]+)\]\s*\([^)]+\)", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _fallback_clean_vector_answer(context):
+    text = _clean_vector_text_for_user(context)
+    if not text:
+        return "لم أجد معلومات كافية للإجابة بدقة."
+
+    sentences = re.split(r"(?<=[.!؟])\s+|\n+", text)
+    useful = []
+    for sentence in sentences:
+        sentence = sentence.strip(" -•\t")
+        if sentence and sentence not in useful:
+            useful.append(sentence)
+        if len(useful) >= 5:
+            break
+
+    if not useful:
+        return text[:900]
+
+    if len(useful) == 1:
+        return useful[0]
+
+    return "\n".join(f"- {sentence}" for sentence in useful)
+
+
 def _direct_vector_answer(question):
     terms = _search_terms(question)
     if not terms:
@@ -794,12 +835,9 @@ def _direct_vector_answer(question):
         blocks.append(f"[{source}] ({row.get('collection')})\n{excerpt}")
 
     context = "\n\n".join(blocks).strip()
-    answer = (
-        "اعتمادًا على قاعدة المعرفة الداخلية:\n\n"
-        + context[:2600]
-        + "\n\nالمصادر الداخلية: "
-        + "، ".join(_compact_sources(sources, limit=5))
-    )
+    answer = _quick_grounded_answer(question, context, sources)
+    if not answer:
+        answer = _fallback_clean_vector_answer(context)
 
     return {
         "answer": answer,
@@ -835,6 +873,9 @@ def _quick_grounded_answer(question, context_kb, sources_kb):
                         "content": (
                             "أجب بالعربية فقط اعتمادًا على النص الداخلي المرفق. "
                             "لا تستخدم الويب ولا تضف معلومات غير موجودة في النص. "
+                            "لا تذكر أرقام chunks أو page IDs أو source_ref أو أسماء collections. "
+                            "لا تقل: قاعدة المعرفة الداخلية أو قاعدة المتجهات. "
+                            "اكتب إجابة طبيعية مختصرة للمستخدم. "
                             "إذا كان النص لا يحتوي الإجابة، قل ذلك بوضوح."
                         ),
                     },
@@ -858,11 +899,7 @@ def _quick_grounded_answer(question, context_kb, sources_kb):
             print(f"[VECTOR FIRST] Quick grounded LLM failed; returning vector excerpt: {e}")
 
     excerpt = context_kb[:1800].strip()
-    return (
-        "وجدت معلومات مرتبطة في قاعدة المعرفة الداخلية، لكن تعذر صياغتها بالنموذج الآن. "
-        "أقرب نص مسترجع:\n\n"
-        + excerpt
-    )
+    return _fallback_clean_vector_answer(excerpt)
 
 
 def _internal_vector_answer(question, protos):
