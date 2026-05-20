@@ -636,6 +636,185 @@ def _probe_internal_retrieval(question, mode="all", include_preview=False):
         }
 
 
+_AR_SEARCH_STOPWORDS = {
+    "ما", "ماهي", "ماهي", "ما", "هي", "هو", "متى", "متي", "كيف", "كم", "من",
+    "في", "عن", "على", "الى", "إلى", "هل", "الطالب", "الطالبة",
+    "يقدر", "ياخذ", "تكون", "يكون", "اقدر", "أقدر", "وش", "ايش",
+}
+
+
+def _normalize_ar_search(text):
+    text = _as_text(text).lower()
+    text = text.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+    text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    text = text.replace("ة", "ه").replace("ى", "ي")
+    text = re.sub(r"[^\w\s\u0600-\u06FF-]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _search_terms(question):
+    normalized = _normalize_ar_search(question)
+    terms = []
+    for term in normalized.split():
+        if len(term) < 3 or term in _AR_SEARCH_STOPWORDS:
+            continue
+        if term not in terms:
+            terms.append(term)
+
+    aliases = {
+        "صيفي": ["الصيفي", "صيف"],
+        "تدريب": ["التدريب", "تعاوني", "التعاوني", "coop"],
+        "ذكاء": ["الذكاء"],
+        "اصطناعي": ["الاصطناعي"],
+        "متطلبات": ["متطلب", "المتطلبات", "شروط"],
+    }
+    for term in list(terms):
+        for alias in aliases.get(term, []):
+            if alias not in terms:
+                terms.append(alias)
+
+    if any(term in normalized for term in ["متي", "متى", "يقدر", "ياخذ"]) and any(
+        term in normalized for term in ["تدريب", "صيفي", "تعاوني"]
+    ):
+        for alias in ["يشترط", "للتسجيل", "التسجيل", "وحدة", "وحده", "120"]:
+            if alias not in terms:
+                terms.append(alias)
+
+    return terms[:14]
+
+
+def _vector_db_path():
+    chroma_dir = global_scope.get("CHROMA_DIR") or "data/chroma_uja1"
+    db_path = BASE_DIR / chroma_dir / "chroma.sqlite3"
+    if db_path.exists():
+        return db_path
+
+    fallback = BASE_DIR / "data" / "chroma_uja1" / "chroma.sqlite3"
+    return fallback if fallback.exists() else None
+
+
+def _load_vector_text_rows():
+    db_path = _vector_db_path()
+    if not db_path:
+        return []
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [
+            dict(row)
+            for row in conn.execute("""
+                SELECT
+                    e.id AS row_id,
+                    f.string_value AS document,
+                    c.name AS collection,
+                    MAX(CASE WHEN m.key = 'source_ref' THEN m.string_value END) AS source_ref,
+                    MAX(CASE WHEN m.key = 'parent_id' THEN m.string_value END) AS parent_id,
+                    MAX(CASE WHEN m.key = 'doc_type' THEN m.string_value END) AS doc_type
+                FROM embedding_fulltext_search f
+                JOIN embeddings e ON e.id = f.rowid
+                JOIN segments s ON s.id = e.segment_id
+                JOIN collections c ON c.id = s.collection
+                LEFT JOIN embedding_metadata m ON m.id = e.id
+                GROUP BY e.id, f.string_value, c.name
+            """)
+        ]
+    except Exception as e:
+        print(f"[DIRECT VECTOR] Failed reading Chroma SQLite text rows: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def _score_vector_row(row, terms, question):
+    text = _normalize_ar_search(row.get("document", ""))
+    if not text:
+        return 0
+
+    score = 0
+    for term in terms:
+        if term in text:
+            score += 3
+        if text.count(term) > 1:
+            score += min(text.count(term), 4)
+
+    q = _normalize_ar_search(question)
+    collection = row.get("collection", "")
+    if any(t in q for t in ["ذكاء", "اصطناعي", "تخصص", "متطلبات"]):
+        if collection in {"degree_plans", "specialization"}:
+            score += 5
+    if any(t in q for t in ["تدريب", "صيفي", "تعاوني"]):
+        if collection in {"coop_rules", "coop_replies", "academic_calendar", "regulations"}:
+            score += 5
+
+    return score
+
+
+def _relevant_excerpt(text, terms, max_chars=1600):
+    text = _as_text(text).strip()
+    if len(text) <= max_chars:
+        return text
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    picked = []
+    for line in lines:
+        norm = _normalize_ar_search(line)
+        if any(term in norm for term in terms):
+            picked.append(line)
+        if len("\n".join(picked)) >= max_chars:
+            break
+
+    excerpt = "\n".join(picked).strip() or text[:max_chars]
+    return excerpt[:max_chars].strip()
+
+
+def _direct_vector_answer(question):
+    terms = _search_terms(question)
+    if not terms:
+        return None
+
+    rows = _load_vector_text_rows()
+    scored = []
+    for row in rows:
+        score = _score_vector_row(row, terms, question)
+        if score > 0:
+            scored.append((score, row))
+
+    scored.sort(key=lambda item: (-item[0], item[1].get("collection", ""), item[1].get("row_id", 0)))
+    top = scored[:4]
+    if not top:
+        return None
+
+    blocks = []
+    sources = []
+    for score, row in top:
+        source = row.get("source_ref") or f"{row.get('collection')}:{row.get('row_id')}"
+        sources.append(source)
+        excerpt = _relevant_excerpt(row.get("document", ""), terms)
+        blocks.append(f"[{source}] ({row.get('collection')})\n{excerpt}")
+
+    context = "\n\n".join(blocks).strip()
+    answer = (
+        "اعتمادًا على قاعدة المعرفة الداخلية:\n\n"
+        + context[:2600]
+        + "\n\nالمصادر الداخلية: "
+        + "، ".join(_compact_sources(sources, limit=5))
+    )
+
+    return {
+        "answer": answer,
+        "sources": {"kb": sources, "uj_web": [], "full_web": []},
+        "contexts": {"kb": context, "uj_web": "", "full_web": ""},
+        "trace": {
+            "kb_answered": True,
+            "retrieval_method": "direct_chroma_sqlite_text_search",
+            "terms": terms,
+            "hits": len(scored),
+            "web_skipped_reason": "internal_vector_context_found",
+        },
+    }
+
+
 def _quick_grounded_answer(question, context_kb, sources_kb):
     context_kb = _as_text(context_kb).strip()
     sources_kb = _compact_sources(sources_kb, limit=8)
@@ -687,6 +866,10 @@ def _quick_grounded_answer(question, context_kb, sources_kb):
 
 
 def _internal_vector_answer(question, protos):
+    direct = _direct_vector_answer(question)
+    if direct is not None:
+        return direct
+
     retrieval_fn = global_scope.get("retrieve_with_router_as_hint") or global_scope.get("retrieve_final")
 
     if retrieval_fn is not None:
