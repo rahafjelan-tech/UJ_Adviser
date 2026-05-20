@@ -26,7 +26,7 @@ NOTEBOOK_PATH_REPLACEMENTS = {
     '"data/vector_database_updated.zip"': '"data/vector_database_updated (1).zip"',
     "chroma.list_collections()": "_safe_chroma_list_collections(chroma)",
     "chroma = chromadb.PersistentClient(path=PERSIST_DIR)": (
-        "_ensure_chroma_schema_compat(CHROMA_DIR)\n"
+        "_ensure_chroma_schema_compat(PERSIST_DIR)\n"
         "chroma = chromadb.PersistentClient(path=PERSIST_DIR)"
     ),
 }
@@ -110,43 +110,36 @@ def _prepare_notebook_code(source):
 def _ensure_chroma_schema_compat(db_dir):
     base = Path(db_dir)
 
-    candidates = []
-
+    db_paths = []
     direct = base / "chroma.sqlite3"
+
     if direct.exists():
-        candidates.append(direct)
+        db_paths.append(direct)
 
     if base.exists():
-        candidates.extend(base.rglob("chroma.sqlite3"))
-
-    # remove duplicates, preserve order
-    seen = set()
-    db_paths = []
-    for p in candidates:
-        rp = p.resolve()
-        if rp not in seen:
-            seen.add(rp)
-            db_paths.append(p)
+        for p in base.rglob("chroma.sqlite3"):
+            if p not in db_paths:
+                db_paths.append(p)
 
     if not db_paths:
-        print(f"[PATCH] No chroma.sqlite3 found under {base}")
+        print(f"[CHROMA PATCH] No chroma.sqlite3 found under {base}")
         return
 
     for db_path in db_paths:
-        print(f"[PATCH] Checking Chroma sqlite schema: {db_path}")
+        print(f"[CHROMA PATCH] Checking SQLite schema: {db_path}")
 
         conn = sqlite3.connect(db_path)
         try:
-            def _table_exists(table_name):
+            def table_exists(table_name):
                 row = conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
                     (table_name,)
                 ).fetchone()
                 return row is not None
 
-            def _ensure_column(table_name, column_name, column_type="TEXT"):
-                if not _table_exists(table_name):
-                    print(f"[PATCH] Chroma table missing in {db_path}: {table_name}")
+            def ensure_column(table_name, column_name, column_type="TEXT"):
+                if not table_exists(table_name):
+                    print(f"[CHROMA PATCH] Table missing: {table_name} in {db_path}")
                     return
 
                 columns = {
@@ -158,19 +151,15 @@ def _ensure_chroma_schema_compat(db_dir):
                     conn.execute(
                         f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
                     )
-                    print(
-                        f"[PATCH] Added missing Chroma column "
-                        f"{table_name}.{column_name} in {db_path}"
-                    )
+                    print(f"[CHROMA PATCH] Added {table_name}.{column_name} in {db_path}")
 
-            _ensure_column("collections", "topic", "TEXT")
-            _ensure_column("segments", "topic", "TEXT")
+            ensure_column("collections", "topic", "TEXT")
+            ensure_column("segments", "topic", "TEXT")
 
             conn.commit()
 
         finally:
             conn.close()
-
 class _CollectionRef:
     def __init__(self, name):
         self.name = name
